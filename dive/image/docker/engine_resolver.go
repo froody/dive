@@ -3,6 +3,7 @@ package docker
 import (
 	"fmt"
 	"io"
+    "encoding/json"
 	"bufio"
 	"net/http"
 	"os"
@@ -22,47 +23,38 @@ type engineResolver struct{}
 func NewResolverFromEngine() *engineResolver {
 	return &engineResolver{}
 }
+/*
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "config": {
+    "mediaType": "application/vnd.oci.image.config.v1+json",
+    "size": 2175,
+    "digest": "sha256:3e9dd60ae426f2f0ec90ffc0220299521e509999187c7313a76522e36d1b3c4f"
+  },
+  "layers": [
+    {
+      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+      "size": 104182,
+      "digest": "sha256:f531499c6b730fc55a63e5ade55ce2c849bbf03f894248e3a2092689e3749312"
+    },
+*/
+
+type ManifestLayer struct {
+    MediaType string `json:"mediaType"`
+    Size int64 `json:"size"`
+    Digest string `json:"digest"`
+}
+
+type OciManifest struct {
+    SchemaVersion int64 `json:"schemaVersion"`
+    MediaType string `json:"mediaType"`
+    Config ManifestLayer `json:"config"`
+    Layers []ManifestLayer `json:"layers"`
+}
 
 func (r *engineResolver) Fetch(id string) (*image.Image, error) {
     print("Fetching image: ", id, "\n")
-
-    temp_dir, err := os.MkdirTemp("", "dive-registry-")
-    if err != nil {
-        print("Error creating temp dir: ", err, "\n")
-    }
-    cmd := exec.Command("/home/tbirch/src/dive/crane", "registry", "serve", "--insecure", "--disk", temp_dir)
-    stderrReader, stderrWriter := io.Pipe()
-    cmd.Stderr = stderrWriter
-    print("Running command: ", cmd, "\n")
-    cmd.Start()
-    print("Command started: ", cmd, "\n")
-    ch := make(chan int)
-
-    in := bufio.NewReader(stderrReader)
-
-    go func() {
-        for true {
-            b, _, _ := in.ReadLine()
-            s := string(b)
-            if strings.Contains(s, "serving on port") {
-                splits := strings.Split(s, " ")
-                port := splits[len(splits) - 1]
-                k, _ := strconv.Atoi(port)
-                ch <- k
-                break;
-            }
-        }
-        for true {
-            in.ReadLine()
-        }
-    }()
-
-    port := <-ch
-    print("Port: ", port, "\n")
-
-    cmd.Process.Kill()
-
-    print("Done fetching image: ", id, "\n")
 
 	reader, err := r.fetchArchive(id)
 	if err != nil {
@@ -138,6 +130,66 @@ func (r *engineResolver) fetchArchive(id string) (io.ReadCloser, error) {
 
     print("Image ID: ", id, "\n")
     fmt.Printf("inspect: %+v\n", inspect)
+
+    temp_dir, err := os.MkdirTemp("", "dive-registry-")
+    print("Temp dir: ", temp_dir, "\n")
+    if err != nil {
+        print("Error creating temp dir: ", err, "\n")
+    }
+    cmd := exec.Command("/home/tbirch/src/dive/crane", "registry", "serve", "--insecure", "--disk", temp_dir)
+    stderrReader, stderrWriter := io.Pipe()
+    cmd.Stderr = stderrWriter
+    print("Running command: ", cmd, "\n")
+    cmd.Start()
+    print("Command started: ", cmd, "\n")
+    ch := make(chan int)
+
+    in := bufio.NewReader(stderrReader)
+
+    go func() {
+        for true {
+            b, _, _ := in.ReadLine()
+            s := string(b)
+            if strings.Contains(s, "serving on port") {
+                splits := strings.Split(s, " ")
+                port := splits[len(splits) - 1]
+                k, _ := strconv.Atoi(port)
+                ch <- k
+                break;
+            }
+        }
+        for true {
+            in.ReadLine()
+        }
+    }()
+
+    port := <-ch
+    print("Port: ", port, "\n")
+
+    imageTag := "localhost:" + strconv.Itoa(port) + "/image:latest"
+    runDockerCmd("tag", id, imageTag)
+    runDockerCmd("push", imageTag)
+
+    resp, _ := http.Get("http://localhost:" + strconv.Itoa(port) + "/v2/image/manifests/latest")
+    body, _ := io.ReadAll(resp.Body)
+    resp.Body.Close()
+
+
+    var manifest OciManifest
+    err = json.Unmarshal(body, &manifest)
+    if err != nil {
+        fmt.Println("ManifestErr:", err)
+    }
+    //fmt.Printf("Responses: '%+v'\n", string(body))
+    fmt.Printf("Response: %+v\n", manifest)
+
+    cmd.Process.Kill()
+
+    dir_contents, err := os.ReadDir(temp_dir)
+    fmt.Printf("Dir contents: %+v\n", dir_contents)
+
+    print("Done fetching image: ", id, "\n")
+
 
 	readCloser, err := dockerClient.ImageSave(ctx, []string{id})
 	if err != nil {
