@@ -10,9 +10,11 @@ import (
 	"os"
 	"path"
 	"strings"
+    "runtime/debug"
 
 	"github.com/wagoodman/dive/dive/filetree"
 	"github.com/wagoodman/dive/dive/image"
+	"github.com/klauspost/compress/zstd"
 )
 
 type ImageArchive struct {
@@ -27,6 +29,17 @@ func NewImageArchive(tarFile io.ReadCloser) (*ImageArchive, error) {
 	}
 
 	tarReader := tar.NewReader(tarFile)
+    print("tarReader: ", tarReader, "\n")
+
+    for {
+        header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+        print("tar Name: ", header.Name, "\n")
+    }
+    //tarFile.Seek(0, 0)
+    tarReader = tar.NewReader(tarFile)
 
 	// store discovered json files in a map so we can read the image in one pass
 	jsonFiles := make(map[string][]byte)
@@ -45,6 +58,8 @@ func NewImageArchive(tarFile io.ReadCloser) (*ImageArchive, error) {
 		}
 
 		name := header.Name
+
+        print("tarf Name: ", name, "\n")
 
 		// some layer tars can be relative layer symlinks to other layer tars
 		if header.Typeflag == tar.TypeSymlink || header.Typeflag == tar.TypeReg {
@@ -86,6 +101,7 @@ func NewImageArchive(tarFile io.ReadCloser) (*ImageArchive, error) {
 				}
 				jsonFiles[name] = fileBuffer
 			} else if strings.HasPrefix(name, "blobs/") {
+                print("blobs: ", name, "\n")
 				// For the OCI-compatible image format (used since Docker 25), use mime sniffing
 				// but limit this to only the blobs/ (containing the config, and the layers)
 
@@ -98,28 +114,47 @@ func NewImageArchive(tarFile io.ReadCloser) (*ImageArchive, error) {
 				buffer := make([]byte, 1024)
 				n, err := io.ReadFull(tarReader, buffer)
 				if err != nil && err != io.ErrUnexpectedEOF {
+                    print("blob err: ", name, ", ", err, "\n")
 					return img, err
 				}
 
+                print("blob ncap: ", name, ", ", n, ", ", cap(buffer), "\n")
+
 				// Only try reading a TAR if file is "big enough"
-				if n == cap(buffer) {
+				//if n == cap(buffer) {
+                {
+                    print("blob cap: ", name,", ", n, "\n")
 					var unwrappedReader io.Reader
 					unwrappedReader, err = gzip.NewReader(io.MultiReader(bytes.NewReader(buffer[:n]), tarReader))
 					if err != nil {
 						// Not a gzipped entry
+                        print("not gzip: ", name, "\n")
 						unwrappedReader = io.MultiReader(bytes.NewReader(buffer[:n]), tarReader)
-					}
+                        unwrappedReader, err = zstd.NewReader(unwrappedReader)
+                        
+                        if err != nil {
+                            print("not zstd: ", name, "\n")
+                            unwrappedReader = io.MultiReader(bytes.NewReader(buffer[:n]), tarReader)
+                        } else {
+                            print("zstd: ", name, "\n")
+                        }
+                    }
 
 					// Try reading a TAR
 					layerReader := tar.NewReader(unwrappedReader)
 					tree, err := processLayerTar(name, layerReader)
 					if err == nil {
+                        print("blob tree: ", tree.Name, "\n")
 						currentLayer++
 						// add the layer to the image
 						img.layerMap[tree.Name] = tree
 						continue
-					}
+					} else {
+                        print("err tar: ", name, ", ", err, "\n")
+                    }
 				}
+
+                print("blob other: \n")
 
 				// Not a TAR (or smaller than our buffer), might be a JSON file
 				decoder := json.NewDecoder(bytes.NewReader(buffer[:n]))
@@ -139,9 +174,20 @@ func NewImageArchive(tarFile io.ReadCloser) (*ImageArchive, error) {
 	}
 
 	manifestContent, exists := jsonFiles["manifest.json"]
+
+    for k, v := range jsonFiles {
+        print("jsonf ", k, "\n")
+        print("jsonf ", string(v), "\n")
+    }
 	if !exists {
 		return img, fmt.Errorf("could not find image manifest")
 	}
+
+    print("Found manifest\n")
+    // get string from byte array
+    stringManifestContent := string(manifestContent)
+
+    print(stringManifestContent, "\n")
 
 	img.manifest = newManifest(manifestContent)
 
@@ -208,6 +254,9 @@ func getFileList(tarReader *tar.Reader) ([]filetree.FileInfo, error) {
 func (img *ImageArchive) ToImage() (*image.Image, error) {
 	trees := make([]*filetree.FileTree, 0)
 
+	for _, treeName := range img.manifest.LayerTarPaths {
+        print("Layer: ", treeName, "\n")
+    }
 	// build the content tree
 	for _, treeName := range img.manifest.LayerTarPaths {
 		tr, exists := img.layerMap[treeName]
@@ -215,6 +264,12 @@ func (img *ImageArchive) ToImage() (*image.Image, error) {
 			trees = append(trees, tr)
 			continue
 		}
+        print("Could not find flayer: ", len(img.layerMap), " layers\n")
+        for k, v := range img.layerMap {
+            print(k,", ", v, "\n")
+        }
+        debug.PrintStack()
+
 		return nil, fmt.Errorf("could not find '%s' in parsed layers", treeName)
 	}
 

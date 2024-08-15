@@ -3,8 +3,11 @@ package docker
 import (
 	"fmt"
 	"io"
+	"bufio"
 	"net/http"
 	"os"
+    "strconv"
+	"os/exec"
 	"strings"
 
 	"github.com/docker/cli/cli/connhelper"
@@ -21,6 +24,46 @@ func NewResolverFromEngine() *engineResolver {
 }
 
 func (r *engineResolver) Fetch(id string) (*image.Image, error) {
+    print("Fetching image: ", id, "\n")
+
+    temp_dir, err := os.MkdirTemp("", "dive-registry-")
+    if err != nil {
+        print("Error creating temp dir: ", err, "\n")
+    }
+    cmd := exec.Command("/home/tbirch/src/dive/crane", "registry", "serve", "--insecure", "--disk", temp_dir)
+    stderrReader, stderrWriter := io.Pipe()
+    cmd.Stderr = stderrWriter
+    print("Running command: ", cmd, "\n")
+    cmd.Start()
+    print("Command started: ", cmd, "\n")
+    ch := make(chan int)
+
+    in := bufio.NewReader(stderrReader)
+
+    go func() {
+        for true {
+            b, _, _ := in.ReadLine()
+            s := string(b)
+            if strings.Contains(s, "serving on port") {
+                splits := strings.Split(s, " ")
+                port := splits[len(splits) - 1]
+                k, _ := strconv.Atoi(port)
+                ch <- k
+                break;
+            }
+        }
+        for true {
+            in.ReadLine()
+        }
+    }()
+
+    port := <-ch
+    print("Port: ", port, "\n")
+
+    cmd.Process.Kill()
+
+    print("Done fetching image: ", id, "\n")
+
 	reader, err := r.fetchArchive(id)
 	if err != nil {
 		return nil, err
@@ -83,7 +126,7 @@ func (r *engineResolver) fetchArchive(id string) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, _, err = dockerClient.ImageInspectWithRaw(ctx, id)
+    inspect, _, err := dockerClient.ImageInspectWithRaw(ctx, id)
 	if err != nil {
 		// don't use the API, the CLI has more informative output
 		fmt.Println("Handler not available locally. Trying to pull '" + id + "'...")
@@ -92,6 +135,9 @@ func (r *engineResolver) fetchArchive(id string) (io.ReadCloser, error) {
 			return nil, err
 		}
 	}
+
+    print("Image ID: ", id, "\n")
+    fmt.Printf("inspect: %+v\n", inspect)
 
 	readCloser, err := dockerClient.ImageSave(ctx, []string{id})
 	if err != nil {
