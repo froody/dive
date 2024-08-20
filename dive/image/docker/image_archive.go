@@ -44,7 +44,7 @@ func gzipReader(r io.Reader) (*tar.Reader, error) {
 
 type TreePair struct {
     tree *filetree.FileTree
-    name string
+    diffid string
     err error
 }
 
@@ -80,7 +80,7 @@ func NewImageArchiveFromDir(directory string, manifest OciManifest, manifest_jso
 
             if strings.HasSuffix(media_type, ".tar") {
                 reader := tar.NewReader(layerReader)
-                tree, err := processLayerTar(diffid, reader)
+                tree, err := processLayerTar(layer, reader)
                 if err != nil {
                     ch <- TreePair{nil, diffid, err}
                 } else {
@@ -92,19 +92,19 @@ func NewImageArchiveFromDir(directory string, manifest OciManifest, manifest_jso
                     ch <- TreePair{nil, diffid, err}
                     return
                 }
-                tree, err := processLayerTar(diffid, reader)
+                tree, err := processLayerTar(layer, reader)
                 if err != nil {
                     ch <- TreePair{nil, diffid, err}
                 } else {
                     ch <- TreePair{tree, diffid, nil}
                 }
-            } else if strings.HasSuffix(media_type, ".tar.zstd") {
+            } else if strings.HasSuffix(media_type, ".tar+zstd") || strings.HasSuffix(media_type, ".tar.zstd") {
                 reader, err := zstdReader(layerReader)
                 if err != nil {
                     ch <- TreePair{nil, diffid, err}
                     return
                 }
-                tree, err := processLayerTar(diffid, reader)
+                tree, err := processLayerTar(layer, reader)
                 if err != nil {
                     ch <- TreePair{nil, diffid, err}
                 } else {
@@ -122,7 +122,7 @@ func NewImageArchiveFromDir(directory string, manifest OciManifest, manifest_jso
             return img, res.err
         }
         fmt.Println("GotLayer: ", res.tree.Name)
-        img.layerMap[res.tree.Name] = res.tree
+        img.layerMap[res.diffid] = res.tree
     }
 
 
@@ -382,10 +382,9 @@ func (img *ImageArchive) ToImage() (*image.Image, error) {
 	}
     */
 
-    for _, key := range  img.layerMap {
-        trees = append(trees, key)
+    for _, diffid := range img.config.RootFs.DiffIds {
+        trees = append(trees, img.layerMap[diffid])
     }
-
 
 	// build the layers array
 	layers := make([]*image.Layer, 0)

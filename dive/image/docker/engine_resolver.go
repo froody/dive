@@ -169,7 +169,6 @@ func (r *engineResolver) fetchArchive(id string) (OciConfig, error) {
     }()
 
     port := <-ch
-    print("Port: ", port, "\n")
 
     imageTag := "localhost:" + strconv.Itoa(port) + "/image:latest"
     runDockerCmd("tag", id, imageTag)
@@ -185,13 +184,8 @@ func (r *engineResolver) fetchArchive(id string) (OciConfig, error) {
     if err != nil {
         fmt.Println("ManifestErr:", err)
     }
-    //fmt.Printf("Responses: '%+v'\n", string(body))
-    fmt.Printf("Response: %+v\n", manifest)
 
     cmd.Process.Kill()
-
-    dir_contents, err := os.ReadDir(temp_dir)
-    fmt.Printf("Dir contents: %+v\n", dir_contents)
 
     print("Done fetching image: ", id, "\n")
 
