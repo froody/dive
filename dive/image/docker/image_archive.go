@@ -56,63 +56,6 @@ func NewImageArchiveFromDir(directory string, manifest OciManifest) (*ImageArchi
 
     ch := make(chan TreePair)
 
-    for _, layer := range manifest.Layers {
-        go func(layer string, media_type string) {
-            layer_filename := strings.ReplaceAll(layer, "sha256:", "")
-            layerReader, err := os.Open(path.Join(directory, layer_filename))
-
-            if err != nil {
-                ch <- TreePair{nil, layer, err}
-                return
-            }
-
-            if strings.HasSuffix(media_type, ".tar") {
-                reader := tar.NewReader(layerReader)
-                tree, err := processLayerTar(layer, reader)
-                if err != nil {
-                    ch <- TreePair{nil, layer, err}
-                } else {
-                    ch <- TreePair{tree, layer, nil}
-                }
-            } else if strings.HasSuffix(media_type, ".tar+gzip") {
-                reader, err := gzipReader(layerReader)
-                if err != nil {
-                    ch <- TreePair{nil, layer, err}
-                    return
-                }
-                tree, err := processLayerTar(layer, reader)
-                if err != nil {
-                    ch <- TreePair{nil, layer, err}
-                } else {
-                    ch <- TreePair{tree, layer, nil}
-                }
-            } else if strings.HasSuffix(media_type, ".tar.zstd") {
-                reader, err := zstdReader(layerReader)
-                if err != nil {
-                    ch <- TreePair{nil, layer, err}
-                    return
-                }
-                tree, err := processLayerTar(layer, reader)
-                if err != nil {
-                    ch <- TreePair{nil, layer, err}
-                } else {
-                    ch <- TreePair{tree, layer, nil}
-                }
-            } else {
-                ch <- TreePair{nil, layer, fmt.Errorf("unknown media type: %s", media_type)}
-            }
-        }(layer.Digest, layer.MediaType)
-    }
-
-    for i := 0; i < len(manifest.Layers); i++ {
-        res := <-ch
-        if res.err != nil {
-            return img, res.err
-        }
-        fmt.Println("GotLayer: ", res.tree.Name)
-        img.layerMap[res.tree.Name] = res.tree
-    }
-
     digest_path := strings.ReplaceAll(manifest.Config.Digest, "sha256:", "")
     configReader, err := os.Open(path.Join(directory, digest_path))
     if err != nil {
@@ -124,6 +67,64 @@ func NewImageArchiveFromDir(directory string, manifest OciManifest) (*ImageArchi
         return img, err
     }
     img.config = newConfig(configContent)
+
+    for idx, layer := range manifest.Layers {
+        go func(layer string, diffid string, media_type string) {
+            layer_filename := strings.ReplaceAll(layer, "sha256:", "")
+            layerReader, err := os.Open(path.Join(directory, layer_filename))
+
+            if err != nil {
+                ch <- TreePair{nil, diffid, err}
+                return
+            }
+
+            if strings.HasSuffix(media_type, ".tar") {
+                reader := tar.NewReader(layerReader)
+                tree, err := processLayerTar(diffid, reader)
+                if err != nil {
+                    ch <- TreePair{nil, diffid, err}
+                } else {
+                    ch <- TreePair{tree, diffid, nil}
+                }
+            } else if strings.HasSuffix(media_type, ".tar+gzip") {
+                reader, err := gzipReader(layerReader)
+                if err != nil {
+                    ch <- TreePair{nil, diffid, err}
+                    return
+                }
+                tree, err := processLayerTar(diffid, reader)
+                if err != nil {
+                    ch <- TreePair{nil, diffid, err}
+                } else {
+                    ch <- TreePair{tree, diffid, nil}
+                }
+            } else if strings.HasSuffix(media_type, ".tar.zstd") {
+                reader, err := zstdReader(layerReader)
+                if err != nil {
+                    ch <- TreePair{nil, diffid, err}
+                    return
+                }
+                tree, err := processLayerTar(diffid, reader)
+                if err != nil {
+                    ch <- TreePair{nil, diffid, err}
+                } else {
+                    ch <- TreePair{tree, diffid, nil}
+                }
+            } else {
+                ch <- TreePair{nil, diffid, fmt.Errorf("unknown media type: %s", media_type)}
+            }
+        }(layer.Digest, img.config.RootFs.DiffIds[idx], layer.MediaType)
+    }
+
+    for i := 0; i < len(manifest.Layers); i++ {
+        res := <-ch
+        if res.err != nil {
+            return img, res.err
+        }
+        fmt.Println("GotLayer: ", res.tree.Name)
+        img.layerMap[res.tree.Name] = res.tree
+    }
+
 
     fmt.Println("config: ", img.config)
     return img, nil
