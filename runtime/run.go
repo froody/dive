@@ -95,10 +95,12 @@ func run(enableUi bool, options Options, imageResolver image.Resolver, events ev
 				events.message("  " + err.Error())
 			}
 			if !options.IgnoreErrors {
+                fmt.Println("file tree has path errors (use '--ignore-errors' to attempt to continue)")
 				events.exitWithError(fmt.Errorf("file tree has path errors (use '--ignore-errors' to attempt to continue)"))
 				return
 			}
 		}
+        fmt.Println("About to ui", enableUi)
 
 		if enableUi {
 			// it appears there is a race condition where termbox.Init() will
@@ -110,6 +112,7 @@ func run(enableUi bool, options Options, imageResolver image.Resolver, events ev
 
 			err = ui.Run(options.Image, analysis, treeStack)
 			if err != nil {
+                fmt.Println("error running ui", err)
 				events.exitWithError(err)
 				return
 			}

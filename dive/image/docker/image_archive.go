@@ -10,7 +10,6 @@ import (
 	"os"
 	"path"
 	"strings"
-    "runtime/debug"
 
 	"github.com/wagoodman/dive/dive/filetree"
 	"github.com/wagoodman/dive/dive/image"
@@ -49,7 +48,7 @@ type TreePair struct {
     err error
 }
 
-func NewImageArchiveFromDir(directory string, manifest OciManifest) (*ImageArchive, error) {
+func NewImageArchiveFromDir(directory string, manifest OciManifest, manifest_json []byte) (*ImageArchive, error) {
 	img := &ImageArchive{
 		layerMap: make(map[string]*filetree.FileTree),
 	}
@@ -67,6 +66,7 @@ func NewImageArchiveFromDir(directory string, manifest OciManifest) (*ImageArchi
         return img, err
     }
     img.config = newConfig(configContent)
+//    img.manifest = newManifest(manifest_json)
 
     for idx, layer := range manifest.Layers {
         go func(layer string, diffid string, media_type string) {
@@ -86,7 +86,7 @@ func NewImageArchiveFromDir(directory string, manifest OciManifest) (*ImageArchi
                 } else {
                     ch <- TreePair{tree, diffid, nil}
                 }
-            } else if strings.HasSuffix(media_type, ".tar+gzip") {
+            } else if strings.HasSuffix(media_type, ".tar+gzip") || strings.HasSuffix(media_type, ".tar.gzip") {
                 reader, err := gzipReader(layerReader)
                 if err != nil {
                     ch <- TreePair{nil, diffid, err}
@@ -365,6 +365,7 @@ func (img *ImageArchive) ToImage() (*image.Image, error) {
         print("Layer: ", treeName, "\n")
     }
 	// build the content tree
+    /*
 	for _, treeName := range img.manifest.LayerTarPaths {
 		tr, exists := img.layerMap[treeName]
 		if exists {
@@ -379,6 +380,12 @@ func (img *ImageArchive) ToImage() (*image.Image, error) {
 
 		return nil, fmt.Errorf("could not find '%s' in parsed layers", treeName)
 	}
+    */
+
+    for _, key := range  img.layerMap {
+        trees = append(trees, key)
+    }
+
 
 	// build the layers array
 	layers := make([]*image.Layer, 0)

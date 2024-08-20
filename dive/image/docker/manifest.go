@@ -2,6 +2,7 @@ package docker
 
 import (
 	"encoding/json"
+    "fmt"
 
 	"github.com/sirupsen/logrus"
 )
@@ -14,6 +15,7 @@ type manifest struct {
 
 func newManifest(manifestBytes []byte) manifest {
 	var manifest []manifest
+    fmt.Println("manifestBytes: ", string(manifestBytes))
 	err := json.Unmarshal(manifestBytes, &manifest)
 	if err != nil {
 		logrus.Panic(err)

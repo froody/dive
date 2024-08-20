@@ -56,6 +56,7 @@ type OciManifest struct {
 type OciConfig struct {
     manifest OciManifest
     dir string
+    raw_manifest []byte
 }
 
 func (r *engineResolver) Fetch(id string) (*image.Image, error) {
@@ -66,7 +67,7 @@ func (r *engineResolver) Fetch(id string) (*image.Image, error) {
 		return nil, err
 	}
 
-	img, err := NewImageArchiveFromDir(oci.dir, oci.manifest)
+	img, err := NewImageArchiveFromDir(oci.dir, oci.manifest, oci.raw_manifest)
 	if err != nil {
 		return nil, err
 	}
@@ -194,5 +195,5 @@ func (r *engineResolver) fetchArchive(id string) (OciConfig, error) {
 
     print("Done fetching image: ", id, "\n")
 
-    return OciConfig{manifest, temp_dir + "/sha256/"}, nil
+    return OciConfig{manifest, temp_dir + "/sha256/", body}, nil
 }
