@@ -23,6 +23,112 @@ type ImageArchive struct {
 	layerMap map[string]*filetree.FileTree
 }
 
+func zstdReader(r io.Reader) (*tar.Reader, error) {
+    zstd_reader, err := zstd.NewReader(r)
+
+    if err != nil {
+        return nil, err
+    }
+
+    return tar.NewReader(zstd_reader), nil
+}
+
+func gzipReader(r io.Reader) (*tar.Reader, error) {
+    gzip_reader, err := gzip.NewReader(r)
+
+    if err != nil {
+        return nil, err
+    }
+
+    return tar.NewReader(gzip_reader), nil
+}
+
+type TreePair struct {
+    tree *filetree.FileTree
+    name string
+    err error
+}
+
+func NewImageArchiveFromDir(directory string, manifest OciManifest) (*ImageArchive, error) {
+	img := &ImageArchive{
+		layerMap: make(map[string]*filetree.FileTree),
+	}
+
+    ch := make(chan TreePair)
+
+    for _, layer := range manifest.Layers {
+        go func(layer string, media_type string) {
+            layer_filename := strings.ReplaceAll(layer, "sha256:", "")
+            layerReader, err := os.Open(path.Join(directory, layer_filename))
+
+            if err != nil {
+                ch <- TreePair{nil, layer, err}
+                return
+            }
+
+            if strings.HasSuffix(media_type, ".tar") {
+                reader := tar.NewReader(layerReader)
+                tree, err := processLayerTar(layer, reader)
+                if err != nil {
+                    ch <- TreePair{nil, layer, err}
+                } else {
+                    ch <- TreePair{tree, layer, nil}
+                }
+            } else if strings.HasSuffix(media_type, ".tar+gzip") {
+                reader, err := gzipReader(layerReader)
+                if err != nil {
+                    ch <- TreePair{nil, layer, err}
+                    return
+                }
+                tree, err := processLayerTar(layer, reader)
+                if err != nil {
+                    ch <- TreePair{nil, layer, err}
+                } else {
+                    ch <- TreePair{tree, layer, nil}
+                }
+            } else if strings.HasSuffix(media_type, ".tar.zstd") {
+                reader, err := zstdReader(layerReader)
+                if err != nil {
+                    ch <- TreePair{nil, layer, err}
+                    return
+                }
+                tree, err := processLayerTar(layer, reader)
+                if err != nil {
+                    ch <- TreePair{nil, layer, err}
+                } else {
+                    ch <- TreePair{tree, layer, nil}
+                }
+            } else {
+                ch <- TreePair{nil, layer, fmt.Errorf("unknown media type: %s", media_type)}
+            }
+        }(layer.Digest, layer.MediaType)
+    }
+
+    for i := 0; i < len(manifest.Layers); i++ {
+        res := <-ch
+        if res.err != nil {
+            return img, res.err
+        }
+        fmt.Println("GotLayer: ", res.tree.Name)
+        img.layerMap[res.tree.Name] = res.tree
+    }
+
+    digest_path := strings.ReplaceAll(manifest.Config.Digest, "sha256:", "")
+    configReader, err := os.Open(path.Join(directory, digest_path))
+    if err != nil {
+        return img, err
+    }
+
+    configContent, err := io.ReadAll(configReader)
+    if err != nil {
+        return img, err
+    }
+    img.config = newConfig(configContent)
+
+    fmt.Println("config: ", img.config)
+    return img, nil
+}
+
 func NewImageArchive(tarFile io.ReadCloser) (*ImageArchive, error) {
 	img := &ImageArchive{
 		layerMap: make(map[string]*filetree.FileTree),

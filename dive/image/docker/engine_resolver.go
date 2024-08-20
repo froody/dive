@@ -53,16 +53,20 @@ type OciManifest struct {
     Layers []ManifestLayer `json:"layers"`
 }
 
+type OciConfig struct {
+    manifest OciManifest
+    dir string
+}
+
 func (r *engineResolver) Fetch(id string) (*image.Image, error) {
     print("Fetching image: ", id, "\n")
 
-	reader, err := r.fetchArchive(id)
+	oci, err := r.fetchArchive(id)
 	if err != nil {
 		return nil, err
 	}
-	defer reader.Close()
 
-	img, err := NewImageArchive(reader)
+	img, err := NewImageArchiveFromDir(oci.dir, oci.manifest)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +81,7 @@ func (r *engineResolver) Build(args []string) (*image.Image, error) {
 	return r.Fetch(id)
 }
 
-func (r *engineResolver) fetchArchive(id string) (io.ReadCloser, error) {
+func (r *engineResolver) fetchArchive(id string) (OciConfig, error) {
 	var err error
 	var dockerClient *client.Client
 
@@ -116,7 +120,7 @@ func (r *engineResolver) fetchArchive(id string) (io.ReadCloser, error) {
 	clientOpts = append(clientOpts, client.WithAPIVersionNegotiation())
 	dockerClient, err = client.NewClientWithOpts(clientOpts...)
 	if err != nil {
-		return nil, err
+		return OciConfig{}, err
 	}
     inspect, _, err := dockerClient.ImageInspectWithRaw(ctx, id)
 	if err != nil {
@@ -124,7 +128,7 @@ func (r *engineResolver) fetchArchive(id string) (io.ReadCloser, error) {
 		fmt.Println("Handler not available locally. Trying to pull '" + id + "'...")
 		err = runDockerCmd("pull", id)
 		if err != nil {
-			return nil, err
+            return OciConfig{}, err
 		}
 	}
 
@@ -190,11 +194,5 @@ func (r *engineResolver) fetchArchive(id string) (io.ReadCloser, error) {
 
     print("Done fetching image: ", id, "\n")
 
-
-	readCloser, err := dockerClient.ImageSave(ctx, []string{id})
-	if err != nil {
-		return nil, err
-	}
-
-	return readCloser, nil
+    return OciConfig{manifest, temp_dir + "/sha256/"}, nil
 }
